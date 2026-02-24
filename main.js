@@ -25,50 +25,87 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
-  inboxFolder: "Inbox",
-  defaultTags: "inbox",
-  defaultTargetFolder: "Notes"
+  inboxFolders: ["Inbox"],
+  destinationFolders: [],
+  sortRules: [],
+  autoSortEnabled: false
 };
 var InboxSorterPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.addCommand({
-      id: "inbox-sorter-open-modal",
-      name: "Open inbox sorter",
+      id: "inbox-sorter-process-inbox",
+      name: "Process Inbox",
       checkCallback: (checking) => {
         if (!checking) {
-          new InboxSorterModal(this.app, this).open();
+          new ProcessInboxModal(this.app, this).open();
         }
         return true;
       }
     });
     this.addSettingTab(new InboxSorterSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (file instanceof import_obsidian.TFile) {
+          void this.autoSortFile(file);
+        }
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file instanceof import_obsidian.TFile) {
+          void this.autoSortFile(file);
+        }
+      })
+    );
   }
-  getDefaultTags() {
-    return this.normalizeTags(this.settings.defaultTags.split(","));
-  }
-  normalizeTags(rawTags) {
-    return rawTags.map((tag) => tag.trim()).filter((tag) => tag.length > 0).map((tag) => this.normalizeTag(tag));
-  }
-  normalizeTag(tag) {
-    return tag.startsWith("#") ? tag.slice(1) : tag;
-  }
-  extractTags(value) {
-    if (!value) return [];
-    if (Array.isArray(value)) {
-      return value.map((tag) => String(tag));
+  async autoSortFile(file) {
+    if (!this.settings.autoSortEnabled) return;
+    if (!this.isInInboxFolder(file)) return;
+    const rule = this.findMatchingRule(file);
+    if (!rule) return;
+    const destination = (0, import_obsidian.normalizePath)(rule.destination);
+    const folder = this.app.vault.getAbstractFileByPath(destination);
+    if (!(folder instanceof import_obsidian.TFolder)) {
+      new import_obsidian.Notice(`Inbox Sorter: Destination not found: ${destination}`);
+      return;
     }
-    if (typeof value === "string") {
-      return value.split(",").map((tag) => tag.trim());
-    }
-    return [];
+    const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
+    await this.app.vault.rename(file, newPath);
+    new import_obsidian.Notice(`Auto-sorted: ${file.basename} \u2192 ${destination}`);
   }
-  mergeTags(existing, incoming) {
-    const set = new Set(existing.map((tag) => this.normalizeTag(tag)));
-    for (const tag of incoming) {
-      set.add(this.normalizeTag(tag));
+  findMatchingRule(file) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache?.frontmatter ?? {};
+    for (const rule of this.settings.sortRules) {
+      const property = rule.property.trim();
+      if (!property) continue;
+      const expected = rule.value.trim();
+      const actual = frontmatter[property];
+      if (String(actual) === expected) {
+        return rule;
+      }
     }
-    return Array.from(set.values());
+    return null;
+  }
+  isInInboxFolder(file) {
+    const parentPath = file.parent?.path ?? "";
+    return this.settings.inboxFolders.some(
+      (folder) => (0, import_obsidian.normalizePath)(folder) === parentPath
+    );
+  }
+  getVaultFolders() {
+    return this.app.vault.getAllLoadedFiles().filter((item) => item instanceof import_obsidian.TFolder).map((folder) => folder.path).sort((a, b) => a.localeCompare(b));
+  }
+  getAvailableDestinationFolders() {
+    const destinations = this.settings.destinationFolders.map((folder) => folder.trim()).filter(Boolean);
+    if (destinations.length > 0) {
+      return destinations;
+    }
+    const inboxSet = new Set(
+      this.settings.inboxFolders.map((folder) => (0, import_obsidian.normalizePath)(folder))
+    );
+    return this.getVaultFolders().filter((folder) => !inboxSet.has(folder));
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -86,224 +123,256 @@ var InboxSorterSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Inbox Sorter Settings" });
-    new import_obsidian.Setting(containerEl).setName("Inbox folder").setDesc("Folder containing notes to process").addText(
-      (text) => text.setPlaceholder("Inbox").setValue(this.plugin.settings.inboxFolder).onChange(async (value) => {
-        this.plugin.settings.inboxFolder = value.trim() || "Inbox";
+    this.renderFolderList(
+      containerEl,
+      "Inbox Folders",
+      "Folders containing unsorted notes",
+      this.plugin.settings.inboxFolders,
+      async (value) => {
+        this.plugin.settings.inboxFolders = value;
+        await this.plugin.saveSettings();
+      },
+      "+ Add Inbox Folder"
+    );
+    this.renderFolderList(
+      containerEl,
+      "Destination Folders",
+      "Folders notes can be moved to",
+      this.plugin.settings.destinationFolders,
+      async (value) => {
+        this.plugin.settings.destinationFolders = value;
+        await this.plugin.saveSettings();
+      },
+      "+ Add Destination Folder"
+    );
+    this.renderSortRules(containerEl);
+    new import_obsidian.Setting(containerEl).setName("Auto-sort").setDesc("Automatically move notes on save/create").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoSortEnabled).onChange(async (value) => {
+        this.plugin.settings.autoSortEnabled = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default target folder").setDesc("Default destination folder for filed notes").addText(
-      (text) => text.setPlaceholder("Notes").setValue(this.plugin.settings.defaultTargetFolder).onChange(async (value) => {
-        this.plugin.settings.defaultTargetFolder = value.trim() || "Notes";
-        await this.plugin.saveSettings();
+  }
+  renderFolderList(containerEl, title, description, values, onChange, addLabel) {
+    containerEl.createEl("h3", { text: title });
+    containerEl.createEl("p", { text: description });
+    const listEl = containerEl.createEl("div", { cls: "inbox-sorter-list" });
+    const renderList = () => {
+      listEl.empty();
+      values.forEach((value, index) => {
+        const setting = new import_obsidian.Setting(listEl);
+        const inputEl = setting.controlEl.createEl("input", { type: "text" });
+        inputEl.value = value;
+        attachFolderAutocomplete(inputEl, () => this.plugin.getVaultFolders());
+        inputEl.addEventListener("input", async () => {
+          values[index] = inputEl.value.trim();
+          await onChange([...values.filter((item) => item.length > 0)]);
+        });
+        setting.addExtraButton(
+          (button) => button.setIcon("x").setTooltip("Remove").onClick(async () => {
+            values.splice(index, 1);
+            await onChange([...values]);
+            renderList();
+          })
+        );
+      });
+    };
+    renderList();
+    new import_obsidian.Setting(containerEl).addButton(
+      (button) => button.setButtonText(addLabel).setCta().onClick(async () => {
+        values.push("");
+        await onChange([...values]);
+        renderList();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default tags").setDesc("Comma-separated tags suggested for new inbox items").addTextArea(
-      (text) => text.setPlaceholder("inbox, to-process").setValue(this.plugin.settings.defaultTags).onChange(async (value) => {
-        this.plugin.settings.defaultTags = value;
-        await this.plugin.saveSettings();
-      })
-    );
+  }
+  renderSortRules(containerEl) {
+    containerEl.createEl("h3", { text: "Sort Rules" });
     containerEl.createEl("p", {
-      text: "Open the inbox sorter from the command palette.",
-      cls: "inbox-sorter-hint"
+      text: "Match a frontmatter property to move notes to a destination folder."
     });
+    const listEl = containerEl.createEl("div", { cls: "inbox-sorter-list" });
+    const renderRules = () => {
+      listEl.empty();
+      this.plugin.settings.sortRules.forEach((rule, index) => {
+        const setting = new import_obsidian.Setting(listEl);
+        const propertyEl = setting.controlEl.createEl("input", { type: "text" });
+        propertyEl.value = rule.property;
+        attachPropertyAutocomplete(propertyEl, () => collectFrontmatterKeys(this.plugin.app));
+        propertyEl.addEventListener("input", async () => {
+          rule.property = propertyEl.value;
+          await this.plugin.saveSettings();
+        });
+        const valueEl = setting.controlEl.createEl("input", { type: "text" });
+        valueEl.value = rule.value;
+        valueEl.addEventListener("input", async () => {
+          rule.value = valueEl.value;
+          await this.plugin.saveSettings();
+        });
+        const destinationEl = setting.controlEl.createEl("input", { type: "text" });
+        destinationEl.value = rule.destination;
+        attachFolderAutocomplete(destinationEl, () => this.plugin.getVaultFolders());
+        destinationEl.addEventListener("input", async () => {
+          rule.destination = destinationEl.value;
+          await this.plugin.saveSettings();
+        });
+        setting.addExtraButton(
+          (button) => button.setIcon("x").setTooltip("Remove").onClick(async () => {
+            this.plugin.settings.sortRules.splice(index, 1);
+            await this.plugin.saveSettings();
+            renderRules();
+          })
+        );
+      });
+    };
+    renderRules();
+    new import_obsidian.Setting(containerEl).addButton(
+      (button) => button.setButtonText("+ Add Rule").setCta().onClick(async () => {
+        this.plugin.settings.sortRules.push({
+          property: "",
+          value: "",
+          destination: ""
+        });
+        await this.plugin.saveSettings();
+        renderRules();
+      })
+    );
   }
 };
-var InboxSorterModal = class extends import_obsidian.Modal {
+var ProcessInboxModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
-    this.selectedFile = null;
-    this.tagsInput = "";
-    this.propertiesInput = "";
+    this.files = [];
+    this.index = 0;
+    this.movedCount = 0;
     this.plugin = plugin;
-    this.selectedFolder = plugin.settings.defaultTargetFolder;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("inbox-sorter-modal");
-    contentEl.createEl("h2", { text: "Inbox Sorter" });
-    const fileSetting = new import_obsidian.Setting(contentEl).setName("Inbox file").setDesc("Select a file to review").addExtraButton(
-      (button) => button.setIcon("refresh-cw").setTooltip("Refresh file list").onClick(() => this.refreshFileList())
-    );
-    this.fileSelectEl = fileSetting.controlEl.createEl("select");
-    this.fileSelectEl.addClass("inbox-sorter-select");
-    this.fileSelectEl.addEventListener("change", () => {
-      const value = this.fileSelectEl.value;
-      const file = this.getInboxFiles().find((item) => item.path === value) ?? null;
-      this.setSelectedFile(file);
+    contentEl.createEl("h2", { text: "Process Inbox" });
+    this.titleEl = contentEl.createEl("div", { cls: "inbox-sorter-title" });
+    this.counterEl = contentEl.createEl("div", { cls: "inbox-sorter-counter" });
+    new import_obsidian.Setting(contentEl).setName("Destination folder").setDesc("Choose where to move this note").addText((text) => {
+      this.destinationInput = text.inputEl;
+      attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
     });
-    this.infoEl = contentEl.createEl("div", { cls: "inbox-sorter-info" });
-    new import_obsidian.Setting(contentEl).setName("Tags").setDesc("Comma-separated tags to apply").addText((text) => {
-      this.tagsInputEl = text.inputEl;
-      text.setPlaceholder("inbox, project-x");
-    });
-    new import_obsidian.Setting(contentEl).setName("Properties").setDesc("One per line: key: value").addTextArea((text) => {
-      this.propertiesInputEl = text.inputEl;
-      text.setPlaceholder("status: review\nowner: me");
-      text.inputEl.addClass("inbox-sorter-properties");
-    });
-    const folderSetting = new import_obsidian.Setting(contentEl).setName("Move to folder").setDesc("Choose destination folder").addExtraButton(
-      (button) => button.setIcon("refresh-cw").setTooltip("Refresh folders").onClick(() => this.refreshFolderList())
-    );
-    this.folderSelectEl = folderSetting.controlEl.createEl("select");
-    this.folderSelectEl.addClass("inbox-sorter-select");
-    this.folderSelectEl.addEventListener("change", () => {
-      this.selectedFolder = this.folderSelectEl.value;
-    });
-    const buttons = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
-    const saveButton = buttons.createEl("button", { text: "Save properties", cls: "mod-cta" });
-    const saveMoveButton = buttons.createEl("button", { text: "Save and move", cls: "mod-cta" });
-    const cancelButton = buttons.createEl("button", { text: "Close" });
-    saveButton.addEventListener("click", () => void this.applyChanges(false));
-    saveMoveButton.addEventListener("click", () => void this.applyChanges(true));
-    cancelButton.addEventListener("click", () => this.close());
-    this.refreshFileList();
-    this.refreshFolderList();
+    const actions = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
+    const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
+    const skipButton = actions.createEl("button", { text: "Skip" });
+    const stopButton = actions.createEl("button", { text: "Stop" });
+    moveButton.addEventListener("click", () => void this.moveAndNext());
+    skipButton.addEventListener("click", () => void this.next());
+    stopButton.addEventListener("click", () => this.finish());
+    this.files = this.collectInboxFiles();
+    this.index = 0;
+    this.movedCount = 0;
+    void this.showCurrent();
   }
-  refreshFileList() {
-    const files = this.getInboxFiles();
-    this.fileSelectEl.empty();
-    if (files.length === 0) {
-      this.fileSelectEl.createEl("option", { text: "No inbox files", value: "" });
-      this.setSelectedFile(null);
-      return;
-    }
-    for (const file of files) {
-      this.fileSelectEl.createEl("option", {
-        text: file.path,
-        value: file.path
-      });
-    }
-    const initial = files[0];
-    this.fileSelectEl.value = initial.path;
-    this.setSelectedFile(initial);
+  getDestinationOptions() {
+    return this.plugin.getAvailableDestinationFolders();
   }
-  refreshFolderList() {
-    const folders = this.getFolders();
-    this.folderSelectEl.empty();
-    for (const folder of folders) {
-      this.folderSelectEl.createEl("option", {
-        text: folder,
-        value: folder
-      });
-    }
-    if (!folders.includes(this.selectedFolder)) {
-      this.selectedFolder = this.plugin.settings.defaultTargetFolder;
-    }
-    if (folders.includes(this.selectedFolder)) {
-      this.folderSelectEl.value = this.selectedFolder;
-    }
-  }
-  getInboxFiles() {
-    const inbox = (0, import_obsidian.normalizePath)(this.plugin.settings.inboxFolder);
-    const files = this.app.vault.getMarkdownFiles();
-    return files.filter(
-      (file) => file.path === inbox || file.path.startsWith(`${inbox}/`)
-    );
-  }
-  getFolders() {
-    const folders = this.app.vault.getAllLoadedFiles().filter((item) => item instanceof import_obsidian.TFolder).map((folder) => folder.path).sort((a, b) => a.localeCompare(b));
-    if (!folders.includes(this.plugin.settings.defaultTargetFolder)) {
-      folders.unshift(this.plugin.settings.defaultTargetFolder);
-    }
-    return folders;
-  }
-  setSelectedFile(file) {
-    this.selectedFile = file;
-    if (!file) {
-      this.infoEl.setText("No file selected.");
-      this.tagsInputEl.value = "";
-      this.propertiesInputEl.value = "";
-      return;
-    }
-    const cache = this.app.metadataCache.getFileCache(file);
-    const frontmatter = cache?.frontmatter ?? {};
-    const existingTags = this.plugin.extractTags(frontmatter.tags);
-    const mergedTags = this.plugin.mergeTags(existingTags, this.plugin.getDefaultTags());
-    this.tagsInput = mergedTags.join(", ");
-    this.tagsInputEl.value = this.tagsInput;
-    const properties = Object.entries(frontmatter).filter(([key]) => key !== "tags").map(([key, value]) => `${key}: ${formatFrontmatterValue(value)}`).join("\n");
-    this.propertiesInput = properties;
-    this.propertiesInputEl.value = this.propertiesInput;
-    const infoLines = [
-      `Path: ${file.path}`,
-      `Size: ${file.stat.size} bytes`,
-      `Created: ${new Date(file.stat.ctime).toLocaleString()}`,
-      `Modified: ${new Date(file.stat.mtime).toLocaleString()}`
-    ];
-    this.infoEl.setText(infoLines.join("\n"));
-  }
-  async applyChanges(moveFile) {
-    const file = this.selectedFile;
-    if (!file) {
-      new import_obsidian.Notice("Select a file first");
-      return;
-    }
-    const tags = this.plugin.normalizeTags(this.tagsInputEl.value.split(","));
-    const properties = parseProperties(this.propertiesInputEl.value);
-    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-      if (tags.length > 0) {
-        frontmatter.tags = this.plugin.mergeTags(this.plugin.extractTags(frontmatter.tags), tags);
+  collectInboxFiles() {
+    const files = [];
+    for (const folderPath of this.plugin.settings.inboxFolders) {
+      const folder = this.app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(folderPath));
+      if (folder instanceof import_obsidian.TFolder) {
+        for (const child of folder.children) {
+          if (child instanceof import_obsidian.TFile && child.extension === "md") {
+            files.push(child);
+          }
+        }
       }
-      for (const [key, value] of Object.entries(properties)) {
-        frontmatter[key] = value;
-      }
-    });
-    if (moveFile) {
-      const targetFolder = (0, import_obsidian.normalizePath)(this.selectedFolder || this.plugin.settings.defaultTargetFolder);
-      await ensureFolderExists(this.app, targetFolder);
-      const newPath = (0, import_obsidian.normalizePath)(`${targetFolder}/${file.name}`);
-      await this.app.vault.rename(file, newPath);
-      new import_obsidian.Notice("Saved and moved the note");
-    } else {
-      new import_obsidian.Notice("Saved properties and tags");
     }
+    return files;
+  }
+  async showCurrent() {
+    if (this.files.length === 0 || this.index >= this.files.length) {
+      this.finish();
+      return;
+    }
+    const file = this.files[this.index];
+    this.titleEl.setText(file.basename);
+    this.counterEl.setText(`Note ${this.index + 1} of ${this.files.length}`);
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file, { active: true });
+  }
+  async moveAndNext() {
+    const file = this.files[this.index];
+    const destination = (0, import_obsidian.normalizePath)(this.destinationInput.value.trim());
+    if (!destination) {
+      new import_obsidian.Notice("Select a destination folder");
+      return;
+    }
+    const folder = this.app.vault.getAbstractFileByPath(destination);
+    if (!(folder instanceof import_obsidian.TFolder)) {
+      new import_obsidian.Notice(`Destination not found: ${destination}`);
+      await this.next();
+      return;
+    }
+    const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
+    await this.app.vault.rename(file, newPath);
+    this.movedCount += 1;
+    await this.next();
+  }
+  async next() {
+    this.index += 1;
+    await this.showCurrent();
+  }
+  finish() {
+    this.close();
+    new import_obsidian.Notice(`Inbox processed. ${this.movedCount} notes moved.`);
   }
 };
-async function ensureFolderExists(app, path) {
-  const normalized = (0, import_obsidian.normalizePath)(path);
-  if (app.vault.getAbstractFileByPath(normalized)) return;
-  await app.vault.createFolder(normalized);
+function attachFolderAutocomplete(inputEl, getOptions) {
+  attachAutocomplete(inputEl, getOptions);
 }
-function parseProperties(input) {
-  const result = {};
-  const lines = input.split("\n").map((line) => line.trim());
-  for (const line of lines) {
-    if (!line || !line.includes(":")) continue;
-    const [rawKey, ...rest] = line.split(":");
-    const key = rawKey.trim();
-    const value = rest.join(":").trim();
-    if (!key) continue;
-    result[key] = parsePropertyValue(value);
-  }
-  return result;
+function attachPropertyAutocomplete(inputEl, getOptions) {
+  attachAutocomplete(inputEl, getOptions);
 }
-function parsePropertyValue(value) {
-  if (!value) return "";
-  const trimmed = value.trim();
-  if (trimmed === "true") return true;
-  if (trimmed === "false") return false;
-  if (!Number.isNaN(Number(trimmed)) && trimmed !== "") return Number(trimmed);
-  if (trimmed.startsWith("{") && trimmed.endsWith("}") || trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-  return trimmed;
+function attachAutocomplete(inputEl, getOptions) {
+  let dropdown = null;
+  const closeDropdown = () => {
+    dropdown?.remove();
+    dropdown = null;
+  };
+  const openDropdown = (matches) => {
+    closeDropdown();
+    if (matches.length === 0) return;
+    dropdown = inputEl.parentElement?.createDiv({ cls: "inbox-sorter-autocomplete" }) ?? null;
+    if (!dropdown) return;
+    matches.slice(0, 20).forEach((option) => {
+      const item = dropdown.createDiv({ cls: "inbox-sorter-autocomplete-item" });
+      item.setText(option);
+      item.addEventListener("click", () => {
+        inputEl.value = option;
+        inputEl.dispatchEvent(new Event("input"));
+        closeDropdown();
+      });
+    });
+  };
+  inputEl.addEventListener("input", () => {
+    const query = inputEl.value.toLowerCase();
+    const options = getOptions();
+    const matches = options.filter((option) => option.toLowerCase().includes(query));
+    openDropdown(matches);
+  });
+  inputEl.addEventListener("focus", () => {
+    const options = getOptions();
+    openDropdown(options);
+  });
+  inputEl.addEventListener("blur", () => {
+    setTimeout(closeDropdown, 150);
+  });
 }
-function formatFrontmatterValue(value) {
-  if (value === null || value === void 0) return "";
-  if (Array.isArray(value) || typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
+function collectFrontmatterKeys(app) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const file of app.vault.getMarkdownFiles()) {
+    const cache = app.metadataCache.getFileCache(file);
+    const frontmatter = cache?.frontmatter ?? {};
+    Object.keys(frontmatter).forEach((key) => keys.add(key));
   }
-  return String(value);
+  return Array.from(keys.values()).sort((a, b) => a.localeCompare(b));
 }
 //# sourceMappingURL=main.js.map

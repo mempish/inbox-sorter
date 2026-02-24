@@ -8,24 +8,15 @@
   margin-bottom: 12px;
 }
 
-.inbox-sorter-select {
-  min-width: 280px;
+.inbox-sorter-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 
-.inbox-sorter-info {
-  white-space: pre-line;
-  padding: 8px 12px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
-  margin-bottom: 8px;
-  background: var(--background-secondary);
+.inbox-sorter-counter {
   color: var(--text-muted);
-  font-size: 0.9em;
-}
-
-.inbox-sorter-properties {
-  min-height: 120px;
-  font-family: var(--font-monospace);
+  margin-bottom: 12px;
 }
 
 .inbox-sorter-actions {
@@ -33,4 +24,27 @@
   gap: 8px;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.inbox-sorter-autocomplete {
+  position: absolute;
+  z-index: 1000;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 0;
+  margin-top: 4px;
+  width: 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  box-shadow: var(--shadow-s);
+}
+
+.inbox-sorter-autocomplete-item {
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.inbox-sorter-autocomplete-item:hover {
+  background: var(--background-modifier-hover);
 }
