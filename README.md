@@ -3,23 +3,19 @@
 Obsidian plugin to supercharge inbox sorting by applying tags and filing notes.
 
 ## Features
-- Add default tags to the active note
-- Tag and move an inbox note to a processed folder
-- Prompt for custom tags
-- Optional timestamp tag
+- File-by-file inbox processing UI
+- View file details and frontmatter properties
+- Add tags and properties per file
+- Move notes to a chosen folder
 
 ## Development
 1) Install dependencies
 2) Run build or watch mode
 
 ## Commands
-- Add default tags to active note
-- Tag and file active note
-- Add tags to active note (prompt)
+- Open inbox sorter
 
 ## Settings
 - Inbox folder
-- Processed folder
+- Default target folder
 - Default tags
-- Tag input mode
-- Timestamp tag options

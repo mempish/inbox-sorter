@@ -3,3 +3,34 @@
   color: var(--text-muted);
   font-size: 0.9em;
 }
+
+.inbox-sorter-modal h2 {
+  margin-bottom: 12px;
+}
+
+.inbox-sorter-select {
+  min-width: 280px;
+}
+
+.inbox-sorter-info {
+  white-space: pre-line;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.inbox-sorter-properties {
+  min-height: 120px;
+  font-family: var(--font-monospace);
+}
+
+.inbox-sorter-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}

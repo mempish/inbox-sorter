@@ -1,31 +1,25 @@
 import {
   App,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
   Setting,
   TFile,
+  TFolder,
   normalizePath,
 } from "obsidian";
 
-type TagInputMode = "prepend-hash" | "raw";
-
 interface InboxSorterSettings {
   inboxFolder: string;
-  processedFolder: string;
   defaultTags: string;
-  tagInputMode: TagInputMode;
-  addTimestampTag: boolean;
-  timestampTagFormat: string;
+  defaultTargetFolder: string;
 }
 
 const DEFAULT_SETTINGS: InboxSorterSettings = {
   inboxFolder: "Inbox",
-  processedFolder: "Notes",
   defaultTags: "inbox",
-  tagInputMode: "prepend-hash",
-  addTimestampTag: false,
-  timestampTagFormat: "yyyy-MM-dd",
+  defaultTargetFolder: "Notes",
 };
 
 export default class InboxSorterPlugin extends Plugin {
@@ -35,95 +29,17 @@ export default class InboxSorterPlugin extends Plugin {
     await this.loadSettings();
 
     this.addCommand({
-      id: "inbox-sorter-tag-active",
-      name: "Add default tags to active note",
+      id: "inbox-sorter-open-modal",
+      name: "Open inbox sorter",
       checkCallback: (checking: boolean) => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) return false;
         if (!checking) {
-          void this.addTagsToFile(file, this.getDefaultTags());
-        }
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "inbox-sorter-tag-and-file",
-      name: "Tag and file active note",
-      checkCallback: (checking: boolean) => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) return false;
-        if (!checking) {
-          void this.tagAndFile(file);
-        }
-        return true;
-      },
-    });
-
-    this.addCommand({
-      id: "inbox-sorter-add-tags-prompt",
-      name: "Add tags to active note (prompt)",
-      checkCallback: (checking: boolean) => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) return false;
-        if (!checking) {
-          void this.addTagsFromPrompt(file);
+          new InboxSorterModal(this.app, this).open();
         }
         return true;
       },
     });
 
     this.addSettingTab(new InboxSorterSettingTab(this.app, this));
-  }
-
-  async addTagsFromPrompt(file: TFile) {
-    const value = window.prompt("Enter tags (comma-separated)");
-    if (!value) return;
-    const tags = this.normalizeTags(value.split(","));
-    await this.addTagsToFile(file, tags);
-  }
-
-  async tagAndFile(file: TFile) {
-    const tags = this.getDefaultTags();
-    await this.addTagsToFile(file, tags);
-    await this.moveFileOutOfInbox(file);
-  }
-
-  async addTagsToFile(file: TFile, tags: string[]) {
-    if (tags.length === 0) {
-      new Notice("No tags provided");
-      return;
-    }
-
-    const fileManager = this.app.fileManager;
-    await fileManager.processFrontMatter(file, (frontmatter) => {
-      const existing = this.extractTags(frontmatter.tags);
-      const merged = this.mergeTags(existing, tags);
-
-      if (this.settings.addTimestampTag) {
-        const stamp = this.formatDateTag(this.settings.timestampTagFormat);
-        merged.push(this.normalizeTag(stamp));
-      }
-
-      frontmatter.tags = merged;
-    });
-
-    new Notice(`Added tags to ${file.basename}`);
-  }
-
-  async moveFileOutOfInbox(file: TFile) {
-    const inboxPath = normalizePath(this.settings.inboxFolder);
-    const targetFolder = normalizePath(this.settings.processedFolder);
-
-    if (!file.path.startsWith(`${inboxPath}/`) && file.path !== inboxPath) {
-      new Notice("Active note is not in the inbox folder");
-      return;
-    }
-
-    await ensureFolderExists(this.app, targetFolder);
-    const newPath = normalizePath(`${targetFolder}/${file.name}`);
-    await this.app.vault.rename(file, newPath);
-    new Notice(`Moved to ${targetFolder}`);
   }
 
   getDefaultTags(): string[] {
@@ -138,9 +54,6 @@ export default class InboxSorterPlugin extends Plugin {
   }
 
   normalizeTag(tag: string): string {
-    if (this.settings.tagInputMode === "raw") {
-      return tag.replace(/^#/, "");
-    }
     return tag.startsWith("#") ? tag.slice(1) : tag;
   }
 
@@ -161,24 +74,6 @@ export default class InboxSorterPlugin extends Plugin {
       set.add(this.normalizeTag(tag));
     }
     return Array.from(set.values());
-  }
-
-  formatDateTag(format: string): string {
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const replacements: Record<string, string> = {
-      yyyy: String(now.getFullYear()),
-      MM: pad(now.getMonth() + 1),
-      dd: pad(now.getDate()),
-      HH: pad(now.getHours()),
-      mm: pad(now.getMinutes()),
-    };
-
-    let result = format;
-    for (const [token, replacement] of Object.entries(replacements)) {
-      result = result.replaceAll(token, replacement);
-    }
-    return result;
   }
 
   async loadSettings() {
@@ -218,21 +113,21 @@ class InboxSorterSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Processed folder")
-      .setDesc("Destination folder for filed notes")
+      .setName("Default target folder")
+      .setDesc("Default destination folder for filed notes")
       .addText((text) =>
         text
           .setPlaceholder("Notes")
-          .setValue(this.plugin.settings.processedFolder)
+          .setValue(this.plugin.settings.defaultTargetFolder)
           .onChange(async (value) => {
-            this.plugin.settings.processedFolder = value.trim() || "Notes";
+            this.plugin.settings.defaultTargetFolder = value.trim() || "Notes";
             await this.plugin.saveSettings();
           })
       );
 
     new Setting(containerEl)
       .setName("Default tags")
-      .setDesc("Comma-separated tags to apply when filing notes")
+      .setDesc("Comma-separated tags suggested for new inbox items")
       .addTextArea((text) =>
         text
           .setPlaceholder("inbox, to-process")
@@ -243,49 +138,233 @@ class InboxSorterSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Tag input mode")
-      .setDesc("How tag input is interpreted")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOption("prepend-hash", "Strip leading #")
-          .addOption("raw", "Keep raw tag text")
-          .setValue(this.plugin.settings.tagInputMode)
-          .onChange(async (value: TagInputMode) => {
-            this.plugin.settings.tagInputMode = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Add timestamp tag")
-      .setDesc("Optionally add a timestamp tag when filing notes")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.addTimestampTag)
-          .onChange(async (value) => {
-            this.plugin.settings.addTimestampTag = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Timestamp tag format")
-      .setDesc("Use tokens: yyyy, MM, dd, HH, mm")
-      .addText((text) =>
-        text
-          .setPlaceholder("yyyy-MM-dd")
-          .setValue(this.plugin.settings.timestampTagFormat)
-          .onChange(async (value) => {
-            this.plugin.settings.timestampTagFormat = value.trim() || "yyyy-MM-dd";
-            await this.plugin.saveSettings();
-          })
-      );
-
     containerEl.createEl("p", {
-      text: "Commands are available in the command palette.",
+      text: "Open the inbox sorter from the command palette.",
       cls: "inbox-sorter-hint",
     });
+  }
+}
+
+class InboxSorterModal extends Modal {
+  plugin: InboxSorterPlugin;
+  selectedFile: TFile | null = null;
+  selectedFolder: string;
+  tagsInput = "";
+  propertiesInput = "";
+
+  fileSelectEl!: HTMLSelectElement;
+  folderSelectEl!: HTMLSelectElement;
+  tagsInputEl!: HTMLInputElement;
+  propertiesInputEl!: HTMLTextAreaElement;
+  infoEl!: HTMLDivElement;
+
+  constructor(app: App, plugin: InboxSorterPlugin) {
+    super(app);
+    this.plugin = plugin;
+    this.selectedFolder = plugin.settings.defaultTargetFolder;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("inbox-sorter-modal");
+
+    contentEl.createEl("h2", { text: "Inbox Sorter" });
+
+    const fileSetting = new Setting(contentEl)
+      .setName("Inbox file")
+      .setDesc("Select a file to review")
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Refresh file list")
+          .onClick(() => this.refreshFileList())
+      );
+
+    this.fileSelectEl = fileSetting.controlEl.createEl("select");
+    this.fileSelectEl.addClass("inbox-sorter-select");
+    this.fileSelectEl.addEventListener("change", () => {
+      const value = this.fileSelectEl.value;
+      const file = this.getInboxFiles().find((item) => item.path === value) ?? null;
+      this.setSelectedFile(file);
+    });
+
+    this.infoEl = contentEl.createEl("div", { cls: "inbox-sorter-info" });
+
+    new Setting(contentEl)
+      .setName("Tags")
+      .setDesc("Comma-separated tags to apply")
+      .addText((text) => {
+        this.tagsInputEl = text.inputEl;
+        text.setPlaceholder("inbox, project-x");
+      });
+
+    new Setting(contentEl)
+      .setName("Properties")
+      .setDesc("One per line: key: value")
+      .addTextArea((text) => {
+        this.propertiesInputEl = text.inputEl;
+        text.setPlaceholder("status: review\nowner: me");
+        text.inputEl.addClass("inbox-sorter-properties");
+      });
+
+    const folderSetting = new Setting(contentEl)
+      .setName("Move to folder")
+      .setDesc("Choose destination folder")
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Refresh folders")
+          .onClick(() => this.refreshFolderList())
+      );
+
+    this.folderSelectEl = folderSetting.controlEl.createEl("select");
+    this.folderSelectEl.addClass("inbox-sorter-select");
+    this.folderSelectEl.addEventListener("change", () => {
+      this.selectedFolder = this.folderSelectEl.value;
+    });
+
+    const buttons = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
+    const saveButton = buttons.createEl("button", { text: "Save properties", cls: "mod-cta" });
+    const saveMoveButton = buttons.createEl("button", { text: "Save and move", cls: "mod-cta" });
+    const cancelButton = buttons.createEl("button", { text: "Close" });
+
+    saveButton.addEventListener("click", () => void this.applyChanges(false));
+    saveMoveButton.addEventListener("click", () => void this.applyChanges(true));
+    cancelButton.addEventListener("click", () => this.close());
+
+    this.refreshFileList();
+    this.refreshFolderList();
+  }
+
+  refreshFileList() {
+    const files = this.getInboxFiles();
+    this.fileSelectEl.empty();
+
+    if (files.length === 0) {
+      this.fileSelectEl.createEl("option", { text: "No inbox files", value: "" });
+      this.setSelectedFile(null);
+      return;
+    }
+
+    for (const file of files) {
+      this.fileSelectEl.createEl("option", {
+        text: file.path,
+        value: file.path,
+      });
+    }
+
+    const initial = files[0];
+    this.fileSelectEl.value = initial.path;
+    this.setSelectedFile(initial);
+  }
+
+  refreshFolderList() {
+    const folders = this.getFolders();
+    this.folderSelectEl.empty();
+
+    for (const folder of folders) {
+      this.folderSelectEl.createEl("option", {
+        text: folder,
+        value: folder,
+      });
+    }
+
+    if (!folders.includes(this.selectedFolder)) {
+      this.selectedFolder = this.plugin.settings.defaultTargetFolder;
+    }
+
+    if (folders.includes(this.selectedFolder)) {
+      this.folderSelectEl.value = this.selectedFolder;
+    }
+  }
+
+  getInboxFiles(): TFile[] {
+    const inbox = normalizePath(this.plugin.settings.inboxFolder);
+    const files = this.app.vault.getMarkdownFiles();
+    return files.filter(
+      (file) => file.path === inbox || file.path.startsWith(`${inbox}/`)
+    );
+  }
+
+  getFolders(): string[] {
+    const folders = this.app.vault
+      .getAllLoadedFiles()
+      .filter((item): item is TFolder => item instanceof TFolder)
+      .map((folder) => folder.path)
+      .sort((a, b) => a.localeCompare(b));
+
+    if (!folders.includes(this.plugin.settings.defaultTargetFolder)) {
+      folders.unshift(this.plugin.settings.defaultTargetFolder);
+    }
+
+    return folders;
+  }
+
+  setSelectedFile(file: TFile | null) {
+    this.selectedFile = file;
+
+    if (!file) {
+      this.infoEl.setText("No file selected.");
+      this.tagsInputEl.value = "";
+      this.propertiesInputEl.value = "";
+      return;
+    }
+
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache?.frontmatter ?? {};
+    const existingTags = this.plugin.extractTags(frontmatter.tags);
+    const mergedTags = this.plugin.mergeTags(existingTags, this.plugin.getDefaultTags());
+
+    this.tagsInput = mergedTags.join(", ");
+    this.tagsInputEl.value = this.tagsInput;
+
+    const properties = Object.entries(frontmatter)
+      .filter(([key]) => key !== "tags")
+      .map(([key, value]) => `${key}: ${formatFrontmatterValue(value)}`)
+      .join("\n");
+
+    this.propertiesInput = properties;
+    this.propertiesInputEl.value = this.propertiesInput;
+
+    const infoLines = [
+      `Path: ${file.path}`,
+      `Size: ${file.stat.size} bytes`,
+      `Created: ${new Date(file.stat.ctime).toLocaleString()}`,
+      `Modified: ${new Date(file.stat.mtime).toLocaleString()}`,
+    ];
+    this.infoEl.setText(infoLines.join("\n"));
+  }
+
+  async applyChanges(moveFile: boolean) {
+    const file = this.selectedFile;
+    if (!file) {
+      new Notice("Select a file first");
+      return;
+    }
+
+    const tags = this.plugin.normalizeTags(this.tagsInputEl.value.split(","));
+    const properties = parseProperties(this.propertiesInputEl.value);
+
+    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      if (tags.length > 0) {
+        frontmatter.tags = this.plugin.mergeTags(this.plugin.extractTags(frontmatter.tags), tags);
+      }
+
+      for (const [key, value] of Object.entries(properties)) {
+        frontmatter[key] = value;
+      }
+    });
+
+    if (moveFile) {
+      const targetFolder = normalizePath(this.selectedFolder || this.plugin.settings.defaultTargetFolder);
+      await ensureFolderExists(this.app, targetFolder);
+      const newPath = normalizePath(`${targetFolder}/${file.name}`);
+      await this.app.vault.rename(file, newPath);
+      new Notice("Saved and moved the note");
+    } else {
+      new Notice("Saved properties and tags");
+    }
   }
 }
 
@@ -293,4 +372,53 @@ async function ensureFolderExists(app: App, path: string) {
   const normalized = normalizePath(path);
   if (app.vault.getAbstractFileByPath(normalized)) return;
   await app.vault.createFolder(normalized);
+}
+
+function parseProperties(input: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const lines = input.split("\n").map((line) => line.trim());
+
+  for (const line of lines) {
+    if (!line || !line.includes(":")) continue;
+    const [rawKey, ...rest] = line.split(":");
+    const key = rawKey.trim();
+    const value = rest.join(":").trim();
+    if (!key) continue;
+    result[key] = parsePropertyValue(value);
+  }
+
+  return result;
+}
+
+function parsePropertyValue(value: string): unknown {
+  if (!value) return "";
+  const trimmed = value.trim();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (!Number.isNaN(Number(trimmed)) && trimmed !== "") return Number(trimmed);
+
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+
+  return trimmed;
+}
+
+function formatFrontmatterValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value) || typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
