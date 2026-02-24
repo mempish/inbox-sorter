@@ -137,9 +137,10 @@
 /* ── Right pane: properties ─────────────────────────────────── */
 
 .inbox-sorter-properties {
-  flex: 1;
+  flex: 0 1 auto;
   overflow-y: auto;
   min-height: 0;
+  max-height: calc(60vh * 0.6);
   margin-bottom: 6px;
 }
 
