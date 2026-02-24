@@ -25,8 +25,9 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
-  inboxFolders: ["Inbox"],
+  inboxFolders: [""],
   destinationFolders: [],
+  archiveFolder: "",
   sortRules: []
 };
 var InboxSorterPlugin = class extends import_obsidian.Plugin {
@@ -144,6 +145,18 @@ var InboxSorterSettingTab = class extends import_obsidian.PluginSettingTab {
       },
       "+ Add Destination Folder"
     );
+    containerEl.createEl("h3", { text: "Archive Folder" });
+    containerEl.createEl("p", { text: "Folder notes are moved to when you click Archive in the Process Inbox modal." });
+    const archiveSettingEl = containerEl.createEl("div", { cls: "inbox-sorter-list" });
+    const archiveSetting = new import_obsidian.Setting(archiveSettingEl);
+    const archiveInput = archiveSetting.controlEl.createEl("input", { type: "text" });
+    archiveInput.value = this.plugin.settings.archiveFolder;
+    archiveInput.placeholder = "e.g. Archive";
+    attachFolderAutocomplete(archiveInput, () => this.plugin.getVaultFolders());
+    archiveInput.addEventListener("input", async () => {
+      this.plugin.settings.archiveFolder = archiveInput.value.trim();
+      await this.plugin.saveSettings();
+    });
     this.renderSortRules(containerEl);
   }
   renderFolderList(containerEl, title, description, values, onChange, addLabel) {
@@ -270,11 +283,15 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
     const actions = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
     const stopButton = actions.createEl("button", { text: "Stop" });
+    const deleteButton = actions.createEl("button", { text: "Delete", cls: "mod-warning" });
+    const archiveButton = actions.createEl("button", { text: "Archive" });
     const skipButton = actions.createEl("button", { text: "Skip" });
     const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
     moveButton.addEventListener("click", () => void this.moveAndNext());
     skipButton.addEventListener("click", () => void this.next());
     stopButton.addEventListener("click", () => this.finish());
+    deleteButton.addEventListener("click", () => void this.deleteAndNext());
+    archiveButton.addEventListener("click", () => void this.archiveAndNext());
     this.files = this.collectInboxFiles();
     this.index = 0;
     this.movedCount = 0;
@@ -301,6 +318,7 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     this.counterEl.setText(`Note ${this.index + 1} of ${this.files.length}`);
     await this.loadNoteContent(file);
     await this.loadProperties(file);
+    this.destinationInput.value = "";
     this.ensureDestinationDefault();
   }
   async moveAndNext() {
@@ -328,6 +346,29 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
   finish() {
     this.close();
     new import_obsidian.Notice(`Inbox processed. ${this.movedCount} notes moved.`);
+  }
+  async deleteAndNext() {
+    const file = this.files[this.index];
+    await this.app.fileManager.trashFile(file);
+    this.files.splice(this.index, 1);
+    await this.showCurrent();
+  }
+  async archiveAndNext() {
+    const archiveFolder = (0, import_obsidian.normalizePath)(this.plugin.settings.archiveFolder.trim());
+    if (!archiveFolder) {
+      new import_obsidian.Notice("Set an archive folder in Inbox Sorter settings first");
+      return;
+    }
+    const file = this.files[this.index];
+    const folder = this.app.vault.getAbstractFileByPath(archiveFolder);
+    if (!(folder instanceof import_obsidian.TFolder)) {
+      await this.app.vault.createFolder(archiveFolder);
+    }
+    const newPath = (0, import_obsidian.normalizePath)(`${archiveFolder}/${file.name}`);
+    await this.app.vault.rename(file, newPath);
+    this.movedCount += 1;
+    this.files.splice(this.index, 1);
+    await this.showCurrent();
   }
   async loadNoteContent(file) {
     const raw = await this.app.vault.read(file);

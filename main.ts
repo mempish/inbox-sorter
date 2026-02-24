@@ -13,6 +13,7 @@ import {
 interface InboxSorterSettings {
   inboxFolders: string[];
   destinationFolders: string[];
+  archiveFolder: string;
   sortRules: SortRule[];
 }
 
@@ -23,8 +24,9 @@ interface SortRule {
 }
 
 const DEFAULT_SETTINGS: InboxSorterSettings = {
-  inboxFolders: ["Inbox"],
+  inboxFolders: [""],
   destinationFolders: [],
+  archiveFolder: "",
   sortRules: [],
 };
 
@@ -175,6 +177,19 @@ class InboxSorterSettingTab extends PluginSettingTab {
       },
       "+ Add Destination Folder"
     );
+
+    containerEl.createEl("h3", { text: "Archive Folder" });
+    containerEl.createEl("p", { text: "Folder notes are moved to when you click Archive in the Process Inbox modal." });
+    const archiveSettingEl = containerEl.createEl("div", { cls: "inbox-sorter-list" });
+    const archiveSetting = new Setting(archiveSettingEl);
+    const archiveInput = archiveSetting.controlEl.createEl("input", { type: "text" });
+    archiveInput.value = this.plugin.settings.archiveFolder;
+    archiveInput.placeholder = "e.g. Archive";
+    attachFolderAutocomplete(archiveInput, () => this.plugin.getVaultFolders());
+    archiveInput.addEventListener("input", async () => {
+      this.plugin.settings.archiveFolder = archiveInput.value.trim();
+      await this.plugin.saveSettings();
+    });
 
     this.renderSortRules(containerEl);
   }
@@ -352,12 +367,16 @@ class ProcessInboxModal extends Modal {
 
     const actions = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
     const stopButton = actions.createEl("button", { text: "Stop" });
+    const deleteButton = actions.createEl("button", { text: "Delete", cls: "mod-warning" });
+    const archiveButton = actions.createEl("button", { text: "Archive" });
     const skipButton = actions.createEl("button", { text: "Skip" });
     const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
 
     moveButton.addEventListener("click", () => void this.moveAndNext());
     skipButton.addEventListener("click", () => void this.next());
     stopButton.addEventListener("click", () => this.finish());
+    deleteButton.addEventListener("click", () => void this.deleteAndNext());
+    archiveButton.addEventListener("click", () => void this.archiveAndNext());
 
     this.files = this.collectInboxFiles();
     this.index = 0;
@@ -391,6 +410,7 @@ class ProcessInboxModal extends Modal {
 
     await this.loadNoteContent(file);
     await this.loadProperties(file);
+    this.destinationInput.value = "";
     this.ensureDestinationDefault();
   }
 
@@ -423,6 +443,33 @@ class ProcessInboxModal extends Modal {
   finish() {
     this.close();
     new Notice(`Inbox processed. ${this.movedCount} notes moved.`);
+  }
+
+  async deleteAndNext() {
+    const file = this.files[this.index];
+    await this.app.fileManager.trashFile(file);
+    this.files.splice(this.index, 1);
+    await this.showCurrent();
+  }
+
+  async archiveAndNext() {
+    const archiveFolder = normalizePath(this.plugin.settings.archiveFolder.trim());
+    if (!archiveFolder) {
+      new Notice("Set an archive folder in Inbox Sorter settings first");
+      return;
+    }
+
+    const file = this.files[this.index];
+    const folder = this.app.vault.getAbstractFileByPath(archiveFolder);
+    if (!(folder instanceof TFolder)) {
+      await this.app.vault.createFolder(archiveFolder);
+    }
+
+    const newPath = normalizePath(`${archiveFolder}/${file.name}`);
+    await this.app.vault.rename(file, newPath);
+    this.movedCount += 1;
+    this.files.splice(this.index, 1);
+    await this.showCurrent();
   }
 
   async loadNoteContent(file: TFile) {
