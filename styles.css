@@ -46,14 +46,23 @@
 
 /* ── Process Inbox Modal ────────────────────────────────────── */
 
-/* Widen the modal */
+/* Widen the modal and prevent the modal-content from scrolling */
 .modal:has(.inbox-sorter-modal) {
   width: min(90vw, 1100px);
+}
+
+.modal:has(.inbox-sorter-modal) .modal-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .inbox-sorter-modal {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .inbox-sorter-modal h2 {
@@ -87,6 +96,7 @@
   min-height: 300px;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .inbox-sorter-pane {

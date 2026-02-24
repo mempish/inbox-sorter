@@ -1,6 +1,6 @@
 {
   "name": "inbox-sorter",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Obsidian plugin to supercharge inbox sorting with tags and filing",
   "main": "main.js",
   "scripts": {
