@@ -334,8 +334,8 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
       folder = this.app.vault.getAbstractFileByPath(destination);
     }
     await this.saveProperties(file);
-    const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
-    await this.app.vault.rename(file, newPath);
+    const safePath = safeMovePath(this.app, destination, file);
+    await this.app.vault.rename(file, safePath);
     this.movedCount += 1;
     await this.next();
   }
@@ -364,8 +364,8 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     if (!(folder instanceof import_obsidian.TFolder)) {
       await this.app.vault.createFolder(archiveFolder);
     }
-    const newPath = (0, import_obsidian.normalizePath)(`${archiveFolder}/${file.name}`);
-    await this.app.vault.rename(file, newPath);
+    const safePath = safeMovePath(this.app, archiveFolder, file);
+    await this.app.vault.rename(file, safePath);
     this.movedCount += 1;
     this.files.splice(this.index, 1);
     await this.showCurrent();
@@ -504,6 +504,17 @@ function collectInboxFiles(app, inboxFolders) {
     }
   }
   return files;
+}
+function safeMovePath(app, folder, file) {
+  const base = (0, import_obsidian.normalizePath)(`${folder}/${file.name}`);
+  if (!app.vault.getAbstractFileByPath(base)) return base;
+  let counter = 1;
+  let candidate;
+  do {
+    candidate = (0, import_obsidian.normalizePath)(`${folder}/${file.basename} ${counter}.${file.extension}`);
+    counter++;
+  } while (app.vault.getAbstractFileByPath(candidate));
+  return candidate;
 }
 function stripFrontmatter(content) {
   if (!content.startsWith("---")) return content;
