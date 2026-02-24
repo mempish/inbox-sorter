@@ -389,9 +389,6 @@ class ProcessInboxModal extends Modal {
     this.titleEl.setText(file.basename);
     this.counterEl.setText(`Note ${this.index + 1} of ${this.files.length}`);
 
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file, { active: true });
-
     await this.loadNoteContent(file);
     await this.loadProperties(file);
     this.ensureDestinationDefault();
@@ -405,10 +402,10 @@ class ProcessInboxModal extends Modal {
       return;
     }
 
-    const folder = this.app.vault.getAbstractFileByPath(destination);
+    let folder = this.app.vault.getAbstractFileByPath(destination);
     if (!(folder instanceof TFolder)) {
-      new Notice(`Destination not found: ${destination}`);
-      return;
+      await this.app.vault.createFolder(destination);
+      folder = this.app.vault.getAbstractFileByPath(destination);
     }
 
     await this.saveProperties(file);

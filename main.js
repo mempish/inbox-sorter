@@ -299,8 +299,6 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     const file = this.files[this.index];
     this.titleEl.setText(file.basename);
     this.counterEl.setText(`Note ${this.index + 1} of ${this.files.length}`);
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file, { active: true });
     await this.loadNoteContent(file);
     await this.loadProperties(file);
     this.ensureDestinationDefault();
@@ -312,10 +310,10 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
       new import_obsidian.Notice("Select a destination folder");
       return;
     }
-    const folder = this.app.vault.getAbstractFileByPath(destination);
+    let folder = this.app.vault.getAbstractFileByPath(destination);
     if (!(folder instanceof import_obsidian.TFolder)) {
-      new import_obsidian.Notice(`Destination not found: ${destination}`);
-      return;
+      await this.app.vault.createFolder(destination);
+      folder = this.app.vault.getAbstractFileByPath(destination);
     }
     await this.saveProperties(file);
     const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
