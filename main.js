@@ -493,14 +493,19 @@ function collectFrontmatterKeys(app) {
 function collectInboxFiles(app, inboxFolders) {
   const files = [];
   const targets = inboxFolders.length ? inboxFolders : ["Inbox"];
+  const walk = (folder) => {
+    for (const child of folder.children) {
+      if (child instanceof import_obsidian.TFile && child.extension === "md") {
+        files.push(child);
+      } else if (child instanceof import_obsidian.TFolder) {
+        walk(child);
+      }
+    }
+  };
   for (const folderPath of targets) {
     const folder = app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(folderPath));
     if (folder instanceof import_obsidian.TFolder) {
-      for (const child of folder.children) {
-        if (child instanceof import_obsidian.TFile && child.extension === "md") {
-          files.push(child);
-        }
-      }
+      walk(folder);
     }
   }
   return files;

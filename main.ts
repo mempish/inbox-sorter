@@ -628,14 +628,21 @@ function collectFrontmatterKeys(app: App): string[] {
 function collectInboxFiles(app: App, inboxFolders: string[]): TFile[] {
   const files: TFile[] = [];
   const targets = inboxFolders.length ? inboxFolders : ["Inbox"];
+
+  const walk = (folder: TFolder) => {
+    for (const child of folder.children) {
+      if (child instanceof TFile && child.extension === "md") {
+        files.push(child);
+      } else if (child instanceof TFolder) {
+        walk(child);
+      }
+    }
+  };
+
   for (const folderPath of targets) {
     const folder = app.vault.getAbstractFileByPath(normalizePath(folderPath));
     if (folder instanceof TFolder) {
-      for (const child of folder.children) {
-        if (child instanceof TFile && child.extension === "md") {
-          files.push(child);
-        }
-      }
+      walk(folder);
     }
   }
   return files;
