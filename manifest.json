@@ -1,0 +1,10 @@
+{
+  "id": "inbox-sorter",
+  "name": "Inbox Sorter",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Supercharge inbox sorting with tags and filing",
+  "author": "",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
