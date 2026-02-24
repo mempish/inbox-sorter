@@ -14,7 +14,6 @@ interface InboxSorterSettings {
   inboxFolders: string[];
   destinationFolders: string[];
   sortRules: SortRule[];
-  autoSortEnabled: boolean;
 }
 
 interface SortRule {
@@ -27,7 +26,6 @@ const DEFAULT_SETTINGS: InboxSorterSettings = {
   inboxFolders: ["Inbox"],
   destinationFolders: [],
   sortRules: [],
-  autoSortEnabled: false,
 };
 
 export default class InboxSorterPlugin extends Plugin {
@@ -47,42 +45,42 @@ export default class InboxSorterPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "inbox-sorter-auto-sort-inbox",
+      name: "Auto-sort Inbox",
+      checkCallback: (checking: boolean) => {
+        if (!checking) {
+          void this.autoSortInbox();
+        }
+        return true;
+      },
+    });
+
     this.addSettingTab(new InboxSorterSettingTab(this.app, this));
-
-    this.registerEvent(
-      this.app.vault.on("create", (file) => {
-        if (file instanceof TFile) {
-          void this.autoSortFile(file);
-        }
-      })
-    );
-
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file instanceof TFile) {
-          void this.autoSortFile(file);
-        }
-      })
-    );
   }
 
-  async autoSortFile(file: TFile) {
-    if (!this.settings.autoSortEnabled) return;
-    if (!this.isInInboxFolder(file)) return;
+  async autoSortInbox() {
+    const files = collectInboxFiles(this.app, this.settings.inboxFolders);
+    let movedCount = 0;
 
-    const rule = this.findMatchingRule(file);
-    if (!rule) return;
+    for (const file of files) {
+      const rule = this.findMatchingRule(file);
+      if (!rule) continue;
 
-    const destination = normalizePath(rule.destination);
-    const folder = this.app.vault.getAbstractFileByPath(destination);
-    if (!(folder instanceof TFolder)) {
-      new Notice(`Inbox Sorter: Destination not found: ${destination}`);
-      return;
+      const destination = normalizePath(rule.destination);
+      const folder = this.app.vault.getAbstractFileByPath(destination);
+      if (!(folder instanceof TFolder)) {
+        new Notice(`Inbox Sorter: Destination not found: ${destination}`);
+        continue;
+      }
+
+      const newPath = normalizePath(`${destination}/${file.name}`);
+      await this.app.vault.rename(file, newPath);
+      movedCount += 1;
+      new Notice(`Auto-sorted: ${file.basename} → ${destination}`);
     }
 
-    const newPath = normalizePath(`${destination}/${file.name}`);
-    await this.app.vault.rename(file, newPath);
-    new Notice(`Auto-sorted: ${file.basename} → ${destination}`);
+    new Notice(`Inbox auto-sort complete. ${movedCount} notes moved.`);
   }
 
   findMatchingRule(file: TFile): SortRule | null {
@@ -179,18 +177,6 @@ class InboxSorterSettingTab extends PluginSettingTab {
     );
 
     this.renderSortRules(containerEl);
-
-    new Setting(containerEl)
-      .setName("Auto-sort")
-      .setDesc("Automatically move notes on save/create")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.autoSortEnabled)
-          .onChange(async (value) => {
-            this.plugin.settings.autoSortEnabled = value;
-            await this.plugin.saveSettings();
-          })
-      );
   }
 
   renderFolderList(
@@ -365,22 +351,17 @@ class ProcessInboxModal extends Modal {
   }
 
   collectInboxFiles(): TFile[] {
-    const files: TFile[] = [];
-    for (const folderPath of this.plugin.settings.inboxFolders) {
-      const folder = this.app.vault.getAbstractFileByPath(normalizePath(folderPath));
-      if (folder instanceof TFolder) {
-        for (const child of folder.children) {
-          if (child instanceof TFile && child.extension === "md") {
-            files.push(child);
-          }
-        }
-      }
-    }
-    return files;
+    return collectInboxFiles(this.app, this.plugin.settings.inboxFolders);
   }
 
   async showCurrent() {
-    if (this.files.length === 0 || this.index >= this.files.length) {
+    if (this.files.length === 0) {
+      this.close();
+      new Notice("Inbox processed. 0 notes moved.");
+      return;
+    }
+
+    if (this.index >= this.files.length) {
       this.finish();
       return;
     }
@@ -493,4 +474,20 @@ function collectFrontmatterKeys(app: App): string[] {
     Object.keys(frontmatter).forEach((key) => keys.add(key));
   }
   return Array.from(keys.values()).sort((a, b) => a.localeCompare(b));
+}
+
+function collectInboxFiles(app: App, inboxFolders: string[]): TFile[] {
+  const files: TFile[] = [];
+  const targets = inboxFolders.length ? inboxFolders : ["Inbox"];
+  for (const folderPath of targets) {
+    const folder = app.vault.getAbstractFileByPath(normalizePath(folderPath));
+    if (folder instanceof TFolder) {
+      for (const child of folder.children) {
+        if (child instanceof TFile && child.extension === "md") {
+          files.push(child);
+        }
+      }
+    }
+  }
+  return files;
 }

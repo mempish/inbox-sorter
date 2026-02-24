@@ -27,8 +27,7 @@ var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   inboxFolders: ["Inbox"],
   destinationFolders: [],
-  sortRules: [],
-  autoSortEnabled: false
+  sortRules: []
 };
 var InboxSorterPlugin = class extends import_obsidian.Plugin {
   async onload() {
@@ -43,36 +42,36 @@ var InboxSorterPlugin = class extends import_obsidian.Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "inbox-sorter-auto-sort-inbox",
+      name: "Auto-sort Inbox",
+      checkCallback: (checking) => {
+        if (!checking) {
+          void this.autoSortInbox();
+        }
+        return true;
+      }
+    });
     this.addSettingTab(new InboxSorterSettingTab(this.app, this));
-    this.registerEvent(
-      this.app.vault.on("create", (file) => {
-        if (file instanceof import_obsidian.TFile) {
-          void this.autoSortFile(file);
-        }
-      })
-    );
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian.TFile) {
-          void this.autoSortFile(file);
-        }
-      })
-    );
   }
-  async autoSortFile(file) {
-    if (!this.settings.autoSortEnabled) return;
-    if (!this.isInInboxFolder(file)) return;
-    const rule = this.findMatchingRule(file);
-    if (!rule) return;
-    const destination = (0, import_obsidian.normalizePath)(rule.destination);
-    const folder = this.app.vault.getAbstractFileByPath(destination);
-    if (!(folder instanceof import_obsidian.TFolder)) {
-      new import_obsidian.Notice(`Inbox Sorter: Destination not found: ${destination}`);
-      return;
+  async autoSortInbox() {
+    const files = collectInboxFiles(this.app, this.settings.inboxFolders);
+    let movedCount = 0;
+    for (const file of files) {
+      const rule = this.findMatchingRule(file);
+      if (!rule) continue;
+      const destination = (0, import_obsidian.normalizePath)(rule.destination);
+      const folder = this.app.vault.getAbstractFileByPath(destination);
+      if (!(folder instanceof import_obsidian.TFolder)) {
+        new import_obsidian.Notice(`Inbox Sorter: Destination not found: ${destination}`);
+        continue;
+      }
+      const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
+      await this.app.vault.rename(file, newPath);
+      movedCount += 1;
+      new import_obsidian.Notice(`Auto-sorted: ${file.basename} \u2192 ${destination}`);
     }
-    const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
-    await this.app.vault.rename(file, newPath);
-    new import_obsidian.Notice(`Auto-sorted: ${file.basename} \u2192 ${destination}`);
+    new import_obsidian.Notice(`Inbox auto-sort complete. ${movedCount} notes moved.`);
   }
   findMatchingRule(file) {
     const cache = this.app.metadataCache.getFileCache(file);
@@ -146,12 +145,6 @@ var InboxSorterSettingTab = class extends import_obsidian.PluginSettingTab {
       "+ Add Destination Folder"
     );
     this.renderSortRules(containerEl);
-    new import_obsidian.Setting(containerEl).setName("Auto-sort").setDesc("Automatically move notes on save/create").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.autoSortEnabled).onChange(async (value) => {
-        this.plugin.settings.autoSortEnabled = value;
-        await this.plugin.saveSettings();
-      })
-    );
   }
   renderFolderList(containerEl, title, description, values, onChange, addLabel) {
     containerEl.createEl("h3", { text: title });
@@ -274,21 +267,15 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     return this.plugin.getAvailableDestinationFolders();
   }
   collectInboxFiles() {
-    const files = [];
-    for (const folderPath of this.plugin.settings.inboxFolders) {
-      const folder = this.app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(folderPath));
-      if (folder instanceof import_obsidian.TFolder) {
-        for (const child of folder.children) {
-          if (child instanceof import_obsidian.TFile && child.extension === "md") {
-            files.push(child);
-          }
-        }
-      }
-    }
-    return files;
+    return collectInboxFiles(this.app, this.plugin.settings.inboxFolders);
   }
   async showCurrent() {
-    if (this.files.length === 0 || this.index >= this.files.length) {
+    if (this.files.length === 0) {
+      this.close();
+      new import_obsidian.Notice("Inbox processed. 0 notes moved.");
+      return;
+    }
+    if (this.index >= this.files.length) {
       this.finish();
       return;
     }
@@ -374,5 +361,20 @@ function collectFrontmatterKeys(app) {
     Object.keys(frontmatter).forEach((key) => keys.add(key));
   }
   return Array.from(keys.values()).sort((a, b) => a.localeCompare(b));
+}
+function collectInboxFiles(app, inboxFolders) {
+  const files = [];
+  const targets = inboxFolders.length ? inboxFolders : ["Inbox"];
+  for (const folderPath of targets) {
+    const folder = app.vault.getAbstractFileByPath((0, import_obsidian.normalizePath)(folderPath));
+    if (folder instanceof import_obsidian.TFolder) {
+      for (const child of folder.children) {
+        if (child instanceof import_obsidian.TFile && child.extension === "md") {
+          files.push(child);
+        }
+      }
+    }
+  }
+  return files;
 }
 //# sourceMappingURL=main.js.map

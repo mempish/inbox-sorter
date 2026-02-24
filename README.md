@@ -3,19 +3,18 @@
 Obsidian plugin to supercharge inbox sorting by applying tags and filing notes.
 
 ## Features
-- File-by-file inbox processing UI
-- View file details and frontmatter properties
-- Add tags and properties per file
-- Move notes to a chosen folder
+- Manual inbox processing (one note at a time)
+- Auto-sort based on frontmatter rules (command)
 
 ## Development
 1) Install dependencies
 2) Run build or watch mode
 
 ## Commands
-- Open inbox sorter
+- Process Inbox
+- Auto-sort Inbox
 
 ## Settings
-- Inbox folder
-- Default target folder
-- Default tags
+- Inbox folders
+- Destination folders
+- Sort rules

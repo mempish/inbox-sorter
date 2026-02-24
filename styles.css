@@ -38,11 +38,13 @@
   max-height: 180px;
   overflow-y: auto;
   box-shadow: var(--shadow-s);
+  text-align: left;
 }
 
 .inbox-sorter-autocomplete-item {
   padding: 6px 10px;
   cursor: pointer;
+  text-align: left;
 }
 
 .inbox-sorter-autocomplete-item:hover {
