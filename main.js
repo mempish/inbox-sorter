@@ -238,6 +238,7 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     this.files = [];
     this.index = 0;
     this.movedCount = 0;
+    this.properties = [];
     this.plugin = plugin;
   }
   onOpen() {
@@ -247,14 +248,30 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     contentEl.createEl("h2", { text: "Process Inbox" });
     this.titleEl = contentEl.createEl("div", { cls: "inbox-sorter-title" });
     this.counterEl = contentEl.createEl("div", { cls: "inbox-sorter-counter" });
-    new import_obsidian.Setting(contentEl).setName("Destination folder").setDesc("Choose where to move this note").addText((text) => {
-      this.destinationInput = text.inputEl;
-      attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
+    const body = contentEl.createEl("div", { cls: "inbox-sorter-split" });
+    const left = body.createEl("div", { cls: "inbox-sorter-pane" });
+    left.createEl("div", { text: "Note Content", cls: "inbox-sorter-pane-title" });
+    this.previewEl = left.createEl("div", { cls: "inbox-sorter-preview" });
+    const right = body.createEl("div", { cls: "inbox-sorter-pane" });
+    right.createEl("div", { text: "Properties", cls: "inbox-sorter-pane-title" });
+    this.propertiesListEl = right.createEl("div", { cls: "inbox-sorter-properties" });
+    const addPropertyButton = right.createEl("button", {
+      text: "Add property",
+      cls: "inbox-sorter-add-property"
     });
+    addPropertyButton.addEventListener("click", () => {
+      this.properties.push({ key: "", value: "" });
+      this.renderProperties();
+    });
+    right.createEl("hr", { cls: "inbox-sorter-divider" });
+    right.createEl("div", { text: "Move to folder", cls: "inbox-sorter-pane-title" });
+    const destinationWrap = right.createEl("div", { cls: "inbox-sorter-destination" });
+    this.destinationInput = destinationWrap.createEl("input", { type: "text" });
+    attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
     const actions = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
-    const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
-    const skipButton = actions.createEl("button", { text: "Skip" });
     const stopButton = actions.createEl("button", { text: "Stop" });
+    const skipButton = actions.createEl("button", { text: "Skip" });
+    const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
     moveButton.addEventListener("click", () => void this.moveAndNext());
     skipButton.addEventListener("click", () => void this.next());
     stopButton.addEventListener("click", () => this.finish());
@@ -284,6 +301,9 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     this.counterEl.setText(`Note ${this.index + 1} of ${this.files.length}`);
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file, { active: true });
+    await this.loadNoteContent(file);
+    await this.loadProperties(file);
+    this.ensureDestinationDefault();
   }
   async moveAndNext() {
     const file = this.files[this.index];
@@ -295,9 +315,9 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     const folder = this.app.vault.getAbstractFileByPath(destination);
     if (!(folder instanceof import_obsidian.TFolder)) {
       new import_obsidian.Notice(`Destination not found: ${destination}`);
-      await this.next();
       return;
     }
+    await this.saveProperties(file);
     const newPath = (0, import_obsidian.normalizePath)(`${destination}/${file.name}`);
     await this.app.vault.rename(file, newPath);
     this.movedCount += 1;
@@ -311,6 +331,58 @@ var ProcessInboxModal = class extends import_obsidian.Modal {
     this.close();
     new import_obsidian.Notice(`Inbox processed. ${this.movedCount} notes moved.`);
   }
+  async loadNoteContent(file) {
+    const raw = await this.app.vault.read(file);
+    this.previewEl.setText(stripFrontmatter(raw));
+  }
+  async loadProperties(file) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache?.frontmatter ?? {};
+    this.properties = Object.entries(frontmatter).map(([key, value]) => ({
+      key,
+      value: formatFrontmatterValue(value)
+    }));
+    this.renderProperties();
+  }
+  renderProperties() {
+    this.propertiesListEl.empty();
+    this.properties.forEach((property, index) => {
+      const row = this.propertiesListEl.createEl("div", { cls: "inbox-sorter-property-row" });
+      const keyInput = row.createEl("input", { type: "text", placeholder: "key" });
+      keyInput.value = property.key;
+      attachPropertyAutocomplete(keyInput, () => collectFrontmatterKeys(this.plugin.app));
+      keyInput.addEventListener("input", () => {
+        this.properties[index].key = keyInput.value;
+      });
+      const valueInput = row.createEl("input", { type: "text", placeholder: "value" });
+      valueInput.value = property.value;
+      valueInput.addEventListener("input", () => {
+        this.properties[index].value = valueInput.value;
+      });
+      const removeButton = row.createEl("button", { text: "\u2715", cls: "inbox-sorter-remove" });
+      removeButton.addEventListener("click", () => {
+        this.properties.splice(index, 1);
+        this.renderProperties();
+      });
+    });
+  }
+  async saveProperties(file) {
+    const entries = this.properties.map((item) => [item.key.trim(), item.value.trim()]).filter(([key]) => key.length > 0);
+    const nextFrontmatter = Object.fromEntries(entries);
+    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      Object.keys(frontmatter).forEach((key) => {
+        delete frontmatter[key];
+      });
+      Object.assign(frontmatter, nextFrontmatter);
+    });
+  }
+  ensureDestinationDefault() {
+    if (this.destinationInput.value.trim()) return;
+    const options = this.getDestinationOptions();
+    if (options.length > 0) {
+      this.destinationInput.value = options[0];
+    }
+  }
 };
 function attachFolderAutocomplete(inputEl, getOptions) {
   attachAutocomplete(inputEl, getOptions);
@@ -320,15 +392,32 @@ function attachPropertyAutocomplete(inputEl, getOptions) {
 }
 function attachAutocomplete(inputEl, getOptions) {
   let dropdown = null;
+  let onWindowChange = null;
   const closeDropdown = () => {
     dropdown?.remove();
     dropdown = null;
+    if (onWindowChange) {
+      window.removeEventListener("resize", onWindowChange);
+      document.removeEventListener("scroll", onWindowChange, true);
+      onWindowChange = null;
+    }
   };
   const openDropdown = (matches) => {
     closeDropdown();
     if (matches.length === 0) return;
-    dropdown = inputEl.parentElement?.createDiv({ cls: "inbox-sorter-autocomplete" }) ?? null;
+    dropdown = document.body.createDiv({ cls: "inbox-sorter-autocomplete" });
     if (!dropdown) return;
+    const updatePosition = () => {
+      if (!dropdown) return;
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = `${rect.left}px`;
+      dropdown.style.top = `${rect.bottom}px`;
+      dropdown.style.width = `${rect.width}px`;
+    };
+    onWindowChange = updatePosition;
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    updatePosition();
     matches.slice(0, 20).forEach((option) => {
       const item = dropdown.createDiv({ cls: "inbox-sorter-autocomplete-item" });
       item.setText(option);
@@ -376,5 +465,22 @@ function collectInboxFiles(app, inboxFolders) {
     }
   }
   return files;
+}
+function stripFrontmatter(content) {
+  if (!content.startsWith("---")) return content;
+  const match = content.match(/^---\s*\n[\s\S]*?\n---\s*\n/);
+  if (!match) return content;
+  return content.slice(match[0].length);
+}
+function formatFrontmatterValue(value) {
+  if (value === null || value === void 0) return "";
+  if (Array.isArray(value) || typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 //# sourceMappingURL=main.js.map

@@ -307,7 +307,10 @@ class ProcessInboxModal extends Modal {
 
   counterEl!: HTMLElement;
   titleEl!: HTMLElement;
+  previewEl!: HTMLDivElement;
+  propertiesListEl!: HTMLDivElement;
   destinationInput!: HTMLInputElement;
+  properties: Array<{ key: string; value: string }> = [];
 
   constructor(app: App, plugin: InboxSorterPlugin) {
     super(app);
@@ -323,18 +326,34 @@ class ProcessInboxModal extends Modal {
     this.titleEl = contentEl.createEl("div", { cls: "inbox-sorter-title" });
     this.counterEl = contentEl.createEl("div", { cls: "inbox-sorter-counter" });
 
-    new Setting(contentEl)
-      .setName("Destination folder")
-      .setDesc("Choose where to move this note")
-      .addText((text) => {
-        this.destinationInput = text.inputEl;
-        attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
-      });
+    const body = contentEl.createEl("div", { cls: "inbox-sorter-split" });
+
+    const left = body.createEl("div", { cls: "inbox-sorter-pane" });
+    left.createEl("div", { text: "Note Content", cls: "inbox-sorter-pane-title" });
+    this.previewEl = left.createEl("div", { cls: "inbox-sorter-preview" });
+
+    const right = body.createEl("div", { cls: "inbox-sorter-pane" });
+    right.createEl("div", { text: "Properties", cls: "inbox-sorter-pane-title" });
+    this.propertiesListEl = right.createEl("div", { cls: "inbox-sorter-properties" });
+    const addPropertyButton = right.createEl("button", {
+      text: "Add property",
+      cls: "inbox-sorter-add-property",
+    });
+    addPropertyButton.addEventListener("click", () => {
+      this.properties.push({ key: "", value: "" });
+      this.renderProperties();
+    });
+
+    right.createEl("hr", { cls: "inbox-sorter-divider" });
+    right.createEl("div", { text: "Move to folder", cls: "inbox-sorter-pane-title" });
+    const destinationWrap = right.createEl("div", { cls: "inbox-sorter-destination" });
+    this.destinationInput = destinationWrap.createEl("input", { type: "text" });
+    attachFolderAutocomplete(this.destinationInput, () => this.getDestinationOptions());
 
     const actions = contentEl.createEl("div", { cls: "inbox-sorter-actions" });
-    const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
-    const skipButton = actions.createEl("button", { text: "Skip" });
     const stopButton = actions.createEl("button", { text: "Stop" });
+    const skipButton = actions.createEl("button", { text: "Skip" });
+    const moveButton = actions.createEl("button", { text: "Move & Next", cls: "mod-cta" });
 
     moveButton.addEventListener("click", () => void this.moveAndNext());
     skipButton.addEventListener("click", () => void this.next());
@@ -372,6 +391,10 @@ class ProcessInboxModal extends Modal {
 
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file, { active: true });
+
+    await this.loadNoteContent(file);
+    await this.loadProperties(file);
+    this.ensureDestinationDefault();
   }
 
   async moveAndNext() {
@@ -385,10 +408,10 @@ class ProcessInboxModal extends Modal {
     const folder = this.app.vault.getAbstractFileByPath(destination);
     if (!(folder instanceof TFolder)) {
       new Notice(`Destination not found: ${destination}`);
-      await this.next();
       return;
     }
 
+    await this.saveProperties(file);
     const newPath = normalizePath(`${destination}/${file.name}`);
     await this.app.vault.rename(file, newPath);
     this.movedCount += 1;
@@ -403,6 +426,69 @@ class ProcessInboxModal extends Modal {
   finish() {
     this.close();
     new Notice(`Inbox processed. ${this.movedCount} notes moved.`);
+  }
+
+  async loadNoteContent(file: TFile) {
+    const raw = await this.app.vault.read(file);
+    this.previewEl.setText(stripFrontmatter(raw));
+  }
+
+  async loadProperties(file: TFile) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const frontmatter = cache?.frontmatter ?? {};
+    this.properties = Object.entries(frontmatter).map(([key, value]) => ({
+      key,
+      value: formatFrontmatterValue(value),
+    }));
+    this.renderProperties();
+  }
+
+  renderProperties() {
+    this.propertiesListEl.empty();
+    this.properties.forEach((property, index) => {
+      const row = this.propertiesListEl.createEl("div", { cls: "inbox-sorter-property-row" });
+      const keyInput = row.createEl("input", { type: "text", placeholder: "key" });
+      keyInput.value = property.key;
+      attachPropertyAutocomplete(keyInput, () => collectFrontmatterKeys(this.plugin.app));
+      keyInput.addEventListener("input", () => {
+        this.properties[index].key = keyInput.value;
+      });
+
+      const valueInput = row.createEl("input", { type: "text", placeholder: "value" });
+      valueInput.value = property.value;
+      valueInput.addEventListener("input", () => {
+        this.properties[index].value = valueInput.value;
+      });
+
+      const removeButton = row.createEl("button", { text: "✕", cls: "inbox-sorter-remove" });
+      removeButton.addEventListener("click", () => {
+        this.properties.splice(index, 1);
+        this.renderProperties();
+      });
+    });
+  }
+
+  async saveProperties(file: TFile) {
+    const entries = this.properties
+      .map((item) => [item.key.trim(), item.value.trim()] as const)
+      .filter(([key]) => key.length > 0);
+
+    const nextFrontmatter = Object.fromEntries(entries);
+
+    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      Object.keys(frontmatter).forEach((key) => {
+        delete frontmatter[key];
+      });
+      Object.assign(frontmatter, nextFrontmatter);
+    });
+  }
+
+  ensureDestinationDefault() {
+    if (this.destinationInput.value.trim()) return;
+    const options = this.getDestinationOptions();
+    if (options.length > 0) {
+      this.destinationInput.value = options[0];
+    }
   }
 }
 
@@ -425,18 +511,37 @@ function attachAutocomplete(
   getOptions: () => string[]
 ) {
   let dropdown: HTMLDivElement | null = null;
+  let onWindowChange: (() => void) | null = null;
 
   const closeDropdown = () => {
     dropdown?.remove();
     dropdown = null;
+    if (onWindowChange) {
+      window.removeEventListener("resize", onWindowChange);
+      document.removeEventListener("scroll", onWindowChange, true);
+      onWindowChange = null;
+    }
   };
 
   const openDropdown = (matches: string[]) => {
     closeDropdown();
     if (matches.length === 0) return;
 
-    dropdown = inputEl.parentElement?.createDiv({ cls: "inbox-sorter-autocomplete" }) ?? null;
+    dropdown = document.body.createDiv({ cls: "inbox-sorter-autocomplete" });
     if (!dropdown) return;
+
+    const updatePosition = () => {
+      if (!dropdown) return;
+      const rect = inputEl.getBoundingClientRect();
+      dropdown.style.left = `${rect.left}px`;
+      dropdown.style.top = `${rect.bottom}px`;
+      dropdown.style.width = `${rect.width}px`;
+    };
+
+    onWindowChange = updatePosition;
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    updatePosition();
 
     matches.slice(0, 20).forEach((option) => {
       const item = dropdown!.createDiv({ cls: "inbox-sorter-autocomplete-item" });
@@ -490,4 +595,23 @@ function collectInboxFiles(app: App, inboxFolders: string[]): TFile[] {
     }
   }
   return files;
+}
+
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith("---")) return content;
+  const match = content.match(/^---\s*\n[\s\S]*?\n---\s*\n/);
+  if (!match) return content;
+  return content.slice(match[0].length);
+}
+
+function formatFrontmatterValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value) || typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
